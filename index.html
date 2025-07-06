@@ -1,0 +1,324 @@
+<html lang="en"><head>
+  <meta charset="UTF-8">
+  <title>Baseplate - BloxxNet</title>
+  <link rel="icon" href="https://i.imgur.com/6OV3MCl.png">
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+    }
+    #playerFrame {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: rgba(128, 128, 128, 0.5);
+      color: white;
+      padding: 8px 12px;
+      font-family: Arial, sans-serif;
+      font-weight: bold;
+      border-radius: 6px;
+      user-select: none;
+      pointer-events: none;
+      z-index: 1000;
+      box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+</head>
+<body>
+  <div id="playerFrame">Guest</div>
+  <script>
+    let scene, camera, renderer;
+    let character, head, torso, rightArm, leftArm, rightLeg, leftLeg;
+    let keys = {};
+    let moveSpeed = 0.1;
+
+    let cameraDistance = 5;
+    let cameraAngleX = 0;
+    let cameraAngleY = 0;
+    let isRightMouseDown = false;
+    let prevMouse = { x: 0, y: 0 };
+
+    let pose = "Idle";
+    let animationTime = 0;
+
+    let velocityY = 0;
+    let gravity = -0.01;
+    let isGrounded = false;
+
+    let baseplate;
+
+    let hitboxHelper;
+    let hitboxBox;
+
+    // Adjustable jump arm speed (try values like 0.05 to 0.2)
+    const jumpArmSpeed = 0.08;
+    let jumpArmRotation = 0;
+
+    function init() {
+      scene = new THREE.Scene();
+
+      // Load cubemap skybox
+      const loader = new THREE.CubeTextureLoader();
+      const skyboxUrls = [
+        "https://i.imgur.com/DiRrjaD.jpeg",
+        "https://i.imgur.com/QZJvaZ4.jpeg",
+        "https://i.imgur.com/JiF78dA.jpeg",
+        "https://i.imgur.com/6vyzSO4.jpeg",
+        "https://i.imgur.com/0Jqi1cp.jpeg",
+        "https://i.imgur.com/p78ddMs.jpeg"
+      ];
+      const cubeTexture = loader.load(skyboxUrls);
+      scene.background = cubeTexture;
+
+      camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
+      );
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      let baseplateGeo = new THREE.BoxGeometry(64, 1, 64);
+      let baseplateMat = new THREE.MeshPhongMaterial({ color: 0x808080 });
+      baseplate = new THREE.Mesh(baseplateGeo, baseplateMat);
+      baseplate.position.y = -0.5;
+      baseplate.receiveShadow = true;
+      scene.add(baseplate);
+
+      let light = new THREE.DirectionalLight(0xffffff, 1);
+      light.position.set(10, 20, 10);
+      scene.add(light);
+      scene.add(new THREE.AmbientLight(0x404040));
+
+      createCharacter();
+      initControls();
+    }
+
+    function createCharacter() {
+      character = new THREE.Group();
+
+      const armAndHeadColor = 0xf4cc43;
+      const torsoColor = 0x176baa;
+      const legsColor = 0xa5bc50;
+
+      let headGeo = new THREE.BoxGeometry(2, 1, 1);
+      let headMat = new THREE.MeshPhongMaterial({ color: armAndHeadColor });
+      head = new THREE.Mesh(headGeo, headMat);
+      head.position.set(0, 2, 0);
+      character.add(head);
+
+      let torsoGeo = new THREE.BoxGeometry(2, 2, 1);
+      let torsoMat = new THREE.MeshPhongMaterial({ color: torsoColor });
+      torso = new THREE.Mesh(torsoGeo, torsoMat);
+      torso.position.set(0, 0.5, 0);
+      character.add(torso);
+
+      let armGeo = new THREE.BoxGeometry(1, 2, 1);
+      armGeo.translate(0, -1, 0);
+      let armMat = new THREE.MeshPhongMaterial({ color: armAndHeadColor });
+
+      rightArm = new THREE.Mesh(armGeo, armMat);
+      rightArm.position.set(-1.5, 1.5, 0);
+      character.add(rightArm);
+
+      leftArm = new THREE.Mesh(armGeo, armMat);
+      leftArm.position.set(1.5, 1.5, 0);
+      character.add(leftArm);
+
+      let legGeo = new THREE.BoxGeometry(1, 2, 1);
+      legGeo.translate(0, -1, 0);
+      let legMat = new THREE.MeshPhongMaterial({ color: legsColor });
+
+      rightLeg = new THREE.Mesh(legGeo, legMat);
+      rightLeg.position.set(-0.5, -0.5, 0);
+      character.add(rightLeg);
+
+      leftLeg = new THREE.Mesh(legGeo, legMat);
+      leftLeg.position.set(0.5, -0.5, 0);
+      character.add(leftLeg);
+
+      scene.add(character);
+
+      let hitboxGeo = new THREE.BoxGeometry(2, 5, 1);
+      let hitboxMat = new THREE.MeshBasicMaterial({ visible: false }); // Invisible material //({ color: 0xff0000, wireframe: true });
+      hitboxHelper = new THREE.Mesh(hitboxGeo, hitboxMat);
+      scene.add(hitboxHelper);
+
+      hitboxBox = new THREE.Box3();
+
+      character.position.set(0, 5, 0);
+
+      updateCamera();
+    }
+
+    function initControls() {
+      window.addEventListener("keydown", (e) => {
+        keys[e.key.toLowerCase()] = true;
+        if (e.code === "Space" && isGrounded) {
+          velocityY = 0.35;
+          isGrounded = false;
+          pose = "Jumping";
+          jumpArmRotation = 0;
+        }
+      });
+
+      window.addEventListener("keyup", (e) => (keys[e.key.toLowerCase()] = false));
+
+      window.addEventListener("mousedown", (e) => {
+        if (e.button === 2) {
+          isRightMouseDown = true;
+          prevMouse.x = e.clientX;
+          prevMouse.y = e.clientY;
+        }
+      });
+      window.addEventListener("mouseup", (e) => {
+        if (e.button === 2) isRightMouseDown = false;
+      });
+
+      window.addEventListener("mousemove", (e) => {
+        if (isRightMouseDown) {
+          let dx = e.clientX - prevMouse.x;
+          let dy = e.clientY - prevMouse.y;
+          cameraAngleY -= dx * 0.005;
+          cameraAngleX += dy * 0.005;
+          cameraAngleX = Math.max(
+            -Math.PI / 2 * 0.9,
+            Math.min(Math.PI / 2 * 0.9, cameraAngleX)
+          );
+          prevMouse.x = e.clientX;
+          prevMouse.y = e.clientY;
+        }
+      });
+
+      window.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      window.addEventListener("wheel", (e) => {
+        cameraDistance += e.deltaY * 0.01;
+        cameraDistance = Math.min(Math.max(cameraDistance, 2), 10);
+      });
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    }
+
+    function updateCamera() {
+      let offset = new THREE.Vector3(
+        Math.sin(cameraAngleY) * Math.cos(cameraAngleX),
+        Math.sin(cameraAngleX),
+        Math.cos(cameraAngleY) * Math.cos(cameraAngleX)
+      );
+      offset.multiplyScalar(cameraDistance);
+
+      camera.position
+        .copy(head.getWorldPosition(new THREE.Vector3()))
+        .add(offset);
+      camera.lookAt(head.getWorldPosition(new THREE.Vector3()));
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      let moveVec = new THREE.Vector3();
+      let forward = new THREE.Vector3();
+      camera.getWorldDirection(forward);
+      forward.y = 0;
+      forward.normalize();
+      let right = new THREE.Vector3();
+      right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+      if (keys["w"]) moveVec.add(forward);
+      if (keys["s"]) moveVec.addScaledVector(forward, -1);
+      if (keys["a"]) moveVec.addScaledVector(right, -1);
+      if (keys["d"]) moveVec.add(right);
+      if (moveVec.length() > 0) moveVec.normalize();
+
+      if (moveVec.length() > 0) {
+        let targetRot = Math.atan2(moveVec.x, moveVec.z);
+        let diff = targetRot - character.rotation.y;
+        if (diff > Math.PI) diff -= Math.PI * 2;
+        if (diff < -Math.PI) diff += Math.PI * 2;
+        character.rotation.y += diff * 0.12;
+
+        let forwardVec = new THREE.Vector3(0, 0, 1).applyEuler(character.rotation);
+        character.position.addScaledVector(forwardVec, moveSpeed);
+
+        if (pose !== "Jumping") pose = "Running";
+      } else {
+        if (pose !== "Jumping") pose = "Idle";
+      }
+
+      velocityY += gravity;
+      character.position.y += velocityY;
+
+      // Move hitbox up 1.5 units
+      hitboxHelper.position.set(
+        character.position.x,
+        character.position.y + 0.01,
+        character.position.z
+      );
+      hitboxHelper.rotation.copy(character.rotation);
+      hitboxHelper.updateMatrixWorld();
+
+      hitboxBox.setFromObject(hitboxHelper);
+      let baseplateBox = new THREE.Box3().setFromObject(baseplate);
+
+      if (hitboxBox.intersectsBox(baseplateBox)) {
+        isGrounded = true;
+        velocityY = 0;
+        character.position.y = baseplateBox.max.y + 2.5;
+        if (pose === "Jumping") pose = "Idle";
+      } else {
+        isGrounded = false;
+      }
+
+      updateAnimation();
+      updateCamera();
+
+      renderer.render(scene, camera);
+    }
+
+    function updateAnimation() {
+      animationTime += 0.02; // slower animation speed overall
+
+      rightArm.rotation.set(0, 0, 0);
+      leftArm.rotation.set(0, 0, 0);
+      rightLeg.rotation.set(0, 0, 0);
+      leftLeg.rotation.set(0, 0, 0);
+
+      if (pose === "Running") {
+        let t = animationTime * 5; // slower walk anim speed (was 10)
+        rightArm.rotation.x = Math.sin(t) * 0.5;
+        leftArm.rotation.x = -Math.sin(t) * 0.5;
+        rightLeg.rotation.x = -Math.sin(t) * 0.5;
+        leftLeg.rotation.x = Math.sin(t) * 0.5;
+      } else if (pose === "Jumping") {
+        jumpArmRotation += jumpArmSpeed;
+        rightArm.rotation.x = Math.sin(jumpArmRotation) * 0.7;
+        leftArm.rotation.x = -Math.sin(jumpArmRotation) * 0.7;
+        // Legs stay straight
+        rightLeg.rotation.x = 0;
+        leftLeg.rotation.x = 0;
+      } else if (pose === "Idle") {
+        // subtle idle movement
+        let t = animationTime;
+        rightArm.rotation.x = Math.sin(t) * 0.05;
+        leftArm.rotation.x = -Math.sin(t) * 0.05;
+        rightLeg.rotation.x = Math.sin(t) * 0.05;// * 0.5
+        leftLeg.rotation.x = -Math.sin(t) * 0.05;// * 0.5
+      }
+    }
+
+    init();
+    animate();
+  </script><canvas data-engine="three.js r155" width="1545" height="1082" style="display: block; width: 1545px; height: 1082px;"></canvas><canvas data-engine="three.js r155" width="2005" height="1279" style="display: block; width: 2005px; height: 1279px;"></canvas><canvas data-engine="three.js r155" width="2005" height="1279" style="display: block; width: 2005px; height: 1279px;"></canvas>
+
+
+</body></html>
